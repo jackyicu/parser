@@ -1,5 +1,5 @@
 /*
-Quantumult X Resource Parser for YAML Proxies
+Quantumult X Resource Parser for YAML Proxies (Updated Version)
 
 Usage:
 1. Save this code as a .js file (e.g., `hm_parser.js`).
@@ -9,112 +9,99 @@ Usage:
    resource_parser_url = "http://your-server.com/hm_parser.js" // Or your gist raw link
    resource_parser_parameter = "http://your-server.com/hm.yaml" // Or your hm.yaml raw link
 
-   [Rewrite_Remote] (Optional, if you want to include the rules from the YAML)
-   http://your-server.com/hm.yaml, tag=YourProxies, update-interval=86400, opt-parser=true, enabled=true
-
-   [Filter_Remote] (Optional, if you want to include the rules from the YAML)
+   [Rewrite_Remote] or [Filter_Remote] (Highly Recommended for updates)
    http://your-server.com/hm.yaml, tag=YourProxies, update-interval=86400, opt-parser=true, enabled=true
 
 */
 
+/**
+ * A simplified YAML parser for the specific structure of the provided hm.yaml.
+ * This function extracts top-level keys, and specifically handles 'proxies' and 'rules'.
+ * @param {string} yamlString The full YAML content as a string.
+ * @returns {object} An object containing parsed data (proxies, rules, etc.).
+ */
 function parseYaml(yamlString) {
     const lines = yamlString.split('\n');
-    const result = {};
-    let currentKey = '';
-    let inProxies = false;
-    let inProxyGroup = false;
+    const result = {
+        proxies: [],
+        rules: [],
+        'proxy-groups': [] // Initialize even if not in the provided snippet
+    };
+    let inProxiesSection = false;
+    let inProxyGroupsSection = false;
 
     for (const line of lines) {
         const trimmedLine = line.trim();
         if (!trimmedLine || trimmedLine.startsWith('#')) {
-            continue;
+            continue; // Skip empty lines and comments
         }
 
+        // Detect section headers
         if (trimmedLine.startsWith('proxies:')) {
-            inProxies = true;
-            result.proxies = [];
+            inProxiesSection = true;
+            inProxyGroupsSection = false;
             continue;
         } else if (trimmedLine.startsWith('proxy-groups:')) {
-            inProxyGroup = true;
-            result['proxy-groups'] = [];
-            inProxies = false; // Exit proxies section
+            inProxiesSection = false;
+            inProxyGroupsSection = true;
             continue;
-        } else if (trimmedLine.includes(':') && !trimmedLine.startsWith('- ')) { // Check for top-level keys
-            const parts = trimmedLine.split(':', 2);
-            currentKey = parts[0].trim();
-            if (parts[1]) {
-                result[currentKey] = parts[1].trim();
-            }
-            inProxies = false;
-            inProxyGroup = false;
+        } else if (trimmedLine.includes(':') && !trimmedLine.startsWith('- ')) {
+            // Top-level key that is not a list item, potentially ends a section
+            inProxiesSection = false;
+            inProxyGroupsSection = false;
+            // You could parse other top-level keys here if needed
             continue;
         }
 
-        if (inProxies && trimmedLine.startsWith('- {')) {
-            // This is a proxy definition
+        // Parse proxies
+        if (inProxiesSection && trimmedLine.startsWith('- {')) {
             try {
-                // Remove the starting '-' and parse as JSON, replacing single quotes with double quotes
-                const jsonString = trimmedLine.substring(2).replace(/'/g, '"');
-                // A more robust way to handle the YAML-like single-line object
-                const cleanedJsonString = jsonString.replace(/(\w+): /g, '"$1": ').replace(/, (\w+):/g, ', "$1":');
-                const proxy = JSON.parse(cleanedJsonString);
-
-                // Map YAML keys to Quantumult X keys
-                const qxProxy = {
-                    tag: proxy.name,
-                    type: proxy.type,
-                    server: proxy.server,
-                    port: proxy.port,
-                    uuid: proxy.uuid,
-                    password: proxy.password, // For trojan/shadowsocks if present
-                    method: proxy.cipher,
-                    "alter-id": proxy.alterId,
-                    "udp-relay": proxy.udp,
-                    "skip-cert-verify": proxy['skip-cert-verify'],
-                    "server-name": proxy.servername,
-                    obfs: proxy.network === 'ws' ? 'ws' : undefined,
-                    "obfs-path": proxy['ws-opts'] ? proxy['ws-opts'].path : undefined,
-                    "obfs-header": proxy['ws-opts'] && proxy['ws-opts'].headers && proxy['ws-opts'].headers.Host ? `Host: ${proxy['ws-opts'].headers.Host}` : undefined,
-                    // Add other types like ss, trojan, etc. if needed and map their parameters
-                };
-
-                // Remove undefined values
-                Object.keys(qxProxy).forEach(key => qxProxy[key] === undefined && delete qxProxy[key]);
-
-                result.proxies.push(qxProxy);
-            } catch (e) {
-                console.error("Error parsing proxy line:", trimmedLine, e);
-            }
-        } else if (inProxyGroup && trimmedLine.startsWith('- name:')) {
-             // This is a proxy group definition
-            try {
-                // Simple parsing for groups, assumes simple key-value pairs
-                const groupNameMatch = trimmedLine.match(/- name:\s*(.*)/);
-                if (groupNameMatch) {
-                    const group = { name: groupNameMatch[1].trim() };
-                    // Read next lines for type and proxies
-                    let i = lines.indexOf(line) + 1;
-                    while (i < lines.length && lines[i].trim().startsWith('type:')) {
-                        const typeMatch = lines[i].trim().match(/type:\s*(.*)/);
-                        if (typeMatch) group.type = typeMatch[1].trim();
-                        i++;
-                        break; // Assuming type is on the next line
-                    }
-                    while (i < lines.length && lines[i].trim().startsWith('proxies:')) {
-                        let j = i + 1;
-                        group.proxies = [];
-                        while (j < lines.length && lines[j].trim().startsWith('- ')) {
-                            group.proxies.push(lines[j].trim().substring(2).trim());
-                            j++;
+                // Extract content within {}
+                const proxyString = trimmedLine.substring(trimmedLine.indexOf('{') + 1, trimmedLine.lastIndexOf('}'));
+                const proxy = {};
+                // Split by comma outside of nested objects/arrays (simplified for this specific YAML)
+                proxyString.split(/,\s*(?![^{]*\})/).forEach(part => {
+                    const [key, value] = part.split(':', 2).map(s => s.trim());
+                    if (key && value) {
+                        const cleanedValue = value.replace(/^"|"$/g, ''); // Remove surrounding quotes
+                        if (cleanedValue === 'true') {
+                            proxy[key] = true;
+                        } else if (cleanedValue === 'false') {
+                            proxy[key] = false;
+                        } else if (!isNaN(cleanedValue) && cleanedValue.trim() !== '') {
+                            proxy[key] = Number(cleanedValue);
+                        } else if (key === 'ws-opts') {
+                            // Special handling for ws-opts, assuming it's a simple key-value string inside {}
+                            const wsOptsMatch = value.match(/^{([^}]+)}$/);
+                            if (wsOptsMatch && wsOptsMatch[1]) {
+                                proxy['ws-opts'] = {};
+                                wsOptsMatch[1].split(',').forEach(wsPart => {
+                                    const [wsKey, wsValue] = wsPart.split(':', 2).map(s => s.trim());
+                                    if (wsKey && wsValue) {
+                                        proxy['ws-opts'][wsKey] = wsValue.replace(/^"|"$/g, '');
+                                    }
+                                });
+                            }
+                        } else {
+                            proxy[key] = cleanedValue;
                         }
-                        i = j;
-                        break;
                     }
-                    result['proxy-groups'].push(group);
-                }
+                });
+                result.proxies.push(proxy);
             } catch (e) {
-                console.error("Error parsing proxy group line:", trimmedLine, e);
+                console.error("Error parsing proxy line:", line, e);
             }
+        }
+        // Parse proxy groups (if they were present, this part needs expansion based on exact format)
+        else if (inProxyGroupsSection && trimmedLine.startsWith('- name:')) {
+            // This part is a placeholder as no proxy groups were in the snippet
+            // If you have proxy groups in your full YAML, this section needs to be developed
+            console.warn("Proxy group parsing not fully implemented as no example provided.");
+        }
+        // Parse rules (assuming rules are top-level list items and not under a 'rules:' section)
+        else if (!inProxiesSection && !inProxyGroupsSection && trimmedLine.startsWith('- IP-CIDR,')) {
+            // For example: - IP-CIDR,103.72.12.0/22,🎯 全球直连,no-resolve
+            result.rules.push(trimmedLine.substring(2).trim()); // Remove the '- ' prefix
         }
     }
     return result;
@@ -124,78 +111,96 @@ function parseYaml(yamlString) {
 async function parse() {
     const url = $resource.parameter;
     if (!url) {
-        $done({});
+        $done({}); // Return empty if no URL parameter provided
         return;
     }
 
     try {
         const response = await $task.fetch({ url: url, method: 'GET' });
         const yamlContent = response.body;
+
+        if (!yamlContent) {
+            console.error("Fetched YAML content is empty.");
+            $done({});
+            return;
+        }
+
         const parsedData = parseYaml(yamlContent);
 
         const qxConfig = {};
+        const qxProxies = [];
+        const qxProxyGroups = [];
+        const qxRules = [];
 
         // Convert proxies to Quantumult X format
         if (parsedData.proxies && parsedData.proxies.length > 0) {
-            qxConfig.proxies = parsedData.proxies.map(p => {
+            parsedData.proxies.forEach(p => {
                 const qxStringParts = [`${p.type}=${p.server}:${p.port}`];
+
                 if (p.uuid) qxStringParts.push(`uuid=${p.uuid}`);
-                if (p.password) qxStringParts.push(`password=${p.password}`);
-                if (p.method) qxStringParts.push(`method=${p.method}`);
-                if (p['alter-id'] !== undefined) qxStringParts.push(`alter-id=${p['alter-id']}`);
-                if (p['udp-relay'] !== undefined) qxStringParts.push(`udp-relay=${p['udp-relay'] ? 'true' : 'false'}`);
+                if (p.password) qxStringParts.push(`password=${p.password}`); // For shadowsocks/trojan
+                if (p.method) qxStringParts.push(`method=${p.method}`); // For shadowsocks
+                if (p.cipher) qxStringParts.push(`method=${p.cipher}`); // Alias for shadowsocks method
+
+                // Vmess specific
+                if (p.alterId !== undefined) qxStringParts.push(`alter-id=${p.alterId}`);
+                if (p.network === 'ws') qxStringParts.push(`obfs=ws`); // Obfuscation type
+                if (p['ws-opts'] && p['ws-opts'].path) qxStringParts.push(`obfs-path=${p['ws-opts'].path}`);
+                if (p['ws-opts'] && p['ws-opts'].headers && p['ws-opts'].headers.Host) {
+                    qxStringParts.push(`obfs-header=Host:${p['ws-opts'].headers.Host}`);
+                }
+
+                // TLS specific
+                if (p.tls !== undefined) qxStringParts.push(`tls=${p.tls ? 'true' : 'false'}`);
                 if (p['skip-cert-verify'] !== undefined) qxStringParts.push(`skip-cert-verify=${p['skip-cert-verify'] ? 'true' : 'false'}`);
-                if (p['server-name']) qxStringParts.push(`server-name=${p['server-name']}`);
-                if (p.obfs) qxStringParts.push(`obfs=${p.obfs}`);
-                if (p['obfs-path']) qxStringParts.push(`obfs-path=${p['obfs-path']}`);
-                if (p['obfs-header']) qxStringParts.push(`obfs-header=${p['obfs-header']}`);
-                if (p.tag) qxStringParts.push(`tag=${p.tag}`);
-                return qxStringParts.join(', ');
+                if (p.servername) qxStringParts.push(`server-name=${p.servername}`);
+
+                // Other general
+                if (p.udp !== undefined) qxStringParts.push(`udp-relay=${p.udp ? 'true' : 'false'}`);
+                if (p.tag) qxStringParts.push(`tag=${p.tag}`); // Use 'name' from YAML as 'tag' in QX
+
+                qxProxies.push(qxStringParts.join(', '));
             });
+            qxConfig.proxies = qxProxies;
         }
 
-        // Convert proxy-groups to Quantumult X format
+        // Convert proxy-groups to Quantumult X format (if present and parsed)
         if (parsedData['proxy-groups'] && parsedData['proxy-groups'].length > 0) {
-            qxConfig['proxy_groups'] = parsedData['proxy-groups'].map(group => {
+             parsedData['proxy-groups'].forEach(group => {
                 const groupParts = [`${group.type}=${group.name}`];
                 if (group.proxies && group.proxies.length > 0) {
-                    groupParts.push(`\n  ${group.proxies.join(', ')}`); // Indent proxies under group
+                    // This assumes group.proxies are just names from the main proxies list
+                    groupParts.push(`${group.proxies.join(', ')}`);
                 }
-                return groupParts.join(', ');
+                qxProxyGroups.push(groupParts.join(', '));
             });
+            qxConfig.proxy_groups = qxProxyGroups;
         }
 
-        // Add rules if they exist in the YAML
-        // This part needs more robust parsing if rules are complex.
-        // For simplicity, we'll assume they are IP-CIDR,DIRECT style.
-        const rules = [];
-        const rulePrefix = 'IP-CIDR,';
-        const globalDirectTag = '🎯 全球直连'; // Assuming this is a predefined tag in QX
 
-        // A simple way to extract rules starting with 'IP-CIDR'
-        const yamlLines = yamlContent.split('\n');
-        for (const line of yamlLines) {
-            const trimmedLine = line.trim();
-            if (trimmedLine.startsWith(rulePrefix)) {
-                // Example: IP-CIDR,103.72.12.0/22,🎯 全球直连,no-resolve
-                const parts = trimmedLine.split(',');
+        // Convert rules to Quantumult X format
+        if (parsedData.rules && parsedData.rules.length > 0) {
+            parsedData.rules.forEach(rule => {
+                // Quantumult X rule format: TYPE,VALUE,POLICY,OPTIONS
+                // Example YAML: IP-CIDR,103.72.12.0/22,🎯 全球直连,no-resolve
+                // Quantumult X: IP-CIDR,103.72.12.0/22,🎯 全球直连
+                const parts = rule.split(',');
                 if (parts.length >= 3) {
-                    const cidr = parts[1].trim();
-                    const action = parts[2].trim(); // This will be "🎯 全球直连"
-                    // Quantumult X rules format: IP-CIDR,xxx.xxx.xxx.xxx/xx,ProxyTag
-                    rules.push(`IP-CIDR,${cidr},${action}`);
+                    // Remove 'no-resolve' if it's the last part, as it's often optional or implied in QX
+                    const qxRule = parts.slice(0, 3).join(','); // Take Type, Value, Policy
+                    qxRules.push(qxRule.trim());
+                } else {
+                    console.warn("Skipping malformed rule:", rule);
                 }
-            }
-        }
-        if (rules.length > 0) {
-            qxConfig.rules = rules;
+            });
+            qxConfig.rules = qxRules;
         }
 
         $done(qxConfig);
 
     } catch (error) {
         console.error("Error fetching or parsing resource:", error);
-        $done({});
+        $done({}); // Ensure something is returned even on error to prevent indefinite loading
     }
 }
 
